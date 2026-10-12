@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -79,7 +78,7 @@ func worker(
 	defer wg.Done()
 
 	for link := range jobs {
-		fmt.Println("Testing link:", link)
+		// fmt.Println("Testing link:", link)
 		result := Result{}
 		result.URL = link
 

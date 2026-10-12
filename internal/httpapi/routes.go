@@ -11,7 +11,6 @@ type API struct{}
 
 type jsonConfig struct {
 	Links     []string `json:"links"`
-	Codes     []Result `json:"responses"`
 	TotalTime int64    `json:"total_ms"`
 }
 
