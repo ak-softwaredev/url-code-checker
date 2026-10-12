@@ -6,73 +6,60 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
-type Response struct {
-	Code int   `json:"code"`
-	Time int64 `json:"ms"`
-}
-
 type Result struct {
-	URL string `json:"url"`
-	Response
+	URL  string `json:"url"`
+	Code int    `json:"code"`
+	Time int64  `json:"ms"`
 }
 
-func Check(ctx context.Context, links []string) ([]Result, int64) {
-	results := make([]Result, 0, len(links))
+var client = http.Client{
+	Timeout: 10 * time.Second,
+}
 
-	t0 := time.Now()
+func Check(ctx context.Context, links []string) <-chan Result {
+	jobs := make(chan string, len(links))
+	results := make(chan Result, len(links))
+	// results := make([]Result, 0, len(links))
+
 	for _, link := range links {
 		cutLink := validateAndCutURL(link)
 		if cutLink == "" {
+			results <- Result{
+				URL:  link,
+				Code: -1,
+				Time: 0,
+			}
 			continue
 		}
 
-		response, err := testLink(ctx, link)
-		if err != nil {
-			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
-		}
-		result := Result{
-			URL:      cutLink,
-			Response: response,
-		}
-		results = append(results, result)
+		jobs <- link
 	}
-	t1 := time.Now()
+	close(jobs)
 
-	return results, t1.Sub(t0).Milliseconds()
-}
+	var wg = sync.WaitGroup{}
 
-func testLink(ctx context.Context, link string) (Response, error) {
-	fmt.Println("Testing link:", link)
-	response := Response{}
-
-	client := http.Client{}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
-
-	t0 := time.Now()
-	r, err := client.Do(req)
-	t1 := time.Now()
-	response.Time = t1.Sub(t0).Milliseconds()
-	if err != nil {
-		response.Code = -1
-		return response, err
+	for range 20 {
+		wg.Add(1)
+		go worker(ctx, jobs, results, &wg)
 	}
-	defer r.Body.Close()
 
-	code := r.StatusCode
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-	response.Code = code
-
-	return response, nil
-
+	return results
 }
 
 func validateAndCutURL(link string) (cutLink string) {
 	parsed, err := url.ParseRequestURI(link)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" {
 		return ""
 	}
 	if len(parsed.RequestURI()) == 1 {
@@ -81,4 +68,45 @@ func validateAndCutURL(link string) (cutLink string) {
 		cutLink = parsed.Host + parsed.RequestURI()
 	}
 	return cutLink
+}
+
+func worker(
+	ctx context.Context,
+	jobs <-chan string,
+	results chan<- Result,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+
+	for link := range jobs {
+		fmt.Println("Testing link:", link)
+		result := Result{}
+		result.URL = link
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+		if err != nil {
+			result.Code = -1
+			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
+			results <- result
+			continue
+		}
+
+		t0 := time.Now()
+		r, err := client.Do(req)
+		t1 := time.Now()
+		result.Time = t1.Sub(t0).Milliseconds()
+		if err != nil {
+			result.Code = -1
+			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
+			results <- result
+			continue
+		}
+		code := r.StatusCode
+
+		result.Code = code
+
+		r.Body.Close()
+
+		results <- result
+	}
 }

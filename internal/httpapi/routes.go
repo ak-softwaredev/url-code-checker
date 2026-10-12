@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 )
 
@@ -39,14 +40,23 @@ func (a *API) postCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, total_ms := Check(r.Context(), links.Links)
-	links.Codes = response
-	links.TotalTime = total_ms
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(links); err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
+	}
+
+	encoder := json.NewEncoder(w)
+
+	for result := range Check(r.Context(), links.Links) {
+		if err := encoder.Encode(result); err != nil {
+			log.Printf("failed to encode result: %v", err)
+			return
+		}
+
+		flusher.Flush()
 	}
 }
 
