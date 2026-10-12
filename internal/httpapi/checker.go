@@ -3,7 +3,9 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -12,42 +14,71 @@ type Response struct {
 	Time int64 `json:"ms"`
 }
 
-func testLink(ctx context.Context, url string) (Response, error) {
-	select {
-	case <-ctx.Done():
-		return Response{}, ctx.Err()
-	default:
-		fmt.Println("Testing link:", url)
-		response := Response{}
-
-		client := http.Client{}
-		t0 := time.Now()
-		r, err := client.Get(url)
-		if err != nil {
-			return Response{}, err
-		}
-		t1 := time.Now()
-		defer r.Body.Close()
-
-		code := r.StatusCode
-
-		response.Code = code
-		response.Time = t1.Sub(t0).Milliseconds()
-
-		return response, nil
-	}
+type Result struct {
+	URL string `json:"url"`
+	Response
 }
 
-func Check(ctx context.Context, urls []string) (map[string]Response, error) {
-	results := make(map[string]Response)
+func Check(ctx context.Context, links []string) ([]Result, int64) {
+	results := make([]Result, 0, len(links))
 
-	for _, url := range urls {
-		response, err := testLink(ctx, url)
-		if err != nil {
-			return map[string]Response{}, err
+	t0 := time.Now()
+	for _, link := range links {
+		cutLink := validateAndCutURL(link)
+		if cutLink == "" {
+			continue
 		}
-		results[url] = response
-	}
 
-	return results, nil
+		response, err := testLink(ctx, link)
+		if err != nil {
+			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
+		}
+		result := Result{
+			URL:      cutLink,
+			Response: response,
+		}
+		results = append(results, result)
+	}
+	t1 := time.Now()
+
+	return results, t1.Sub(t0).Milliseconds()
+}
+
+func testLink(ctx context.Context, link string) (Response, error) {
+	fmt.Println("Testing link:", link)
+	response := Response{}
+
+	client := http.Client{}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+
+	t0 := time.Now()
+	r, err := client.Do(req)
+	t1 := time.Now()
+	response.Time = t1.Sub(t0).Milliseconds()
+	if err != nil {
+		response.Code = -1
+		return response, err
+	}
+	defer r.Body.Close()
+
+	code := r.StatusCode
+
+	response.Code = code
+
+	return response, nil
+
+}
+
+func validateAndCutURL(link string) (cutLink string) {
+	parsed, err := url.ParseRequestURI(link)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	if len(parsed.RequestURI()) == 1 {
+		cutLink = parsed.Host + parsed.Path
+	} else {
+		cutLink = parsed.Host + parsed.RequestURI()
+	}
+	return cutLink
 }
