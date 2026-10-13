@@ -9,24 +9,32 @@ import (
 	"time"
 )
 
+type Job struct {
+	Context context.Context
+	URL     string
+	Reply   chan<- Result
+	Done    func()
+}
+
 type Result struct {
 	URL  string `json:"url"`
 	Code int    `json:"code"`
 	Time int64  `json:"ms"`
 }
 
+var jobs = make(chan Job, 16*1024)
 var client = http.Client{
-	Timeout: 10 * time.Second,
+	Timeout: 5 * time.Second,
 }
 
 func Check(ctx context.Context, links []string) <-chan Result {
-	jobs := make(chan string, len(links))
 	results := make(chan Result, len(links))
-	// results := make([]Result, 0, len(links))
+
+	wg := sync.WaitGroup{}
 
 	for _, link := range links {
-		cutLink := validateAndCutURL(link)
-		if cutLink == "" {
+		valid := validateURL(link)
+		if !valid {
 			results <- Result{
 				URL:  link,
 				Code: -1,
@@ -35,15 +43,15 @@ func Check(ctx context.Context, links []string) <-chan Result {
 			continue
 		}
 
-		jobs <- link
-	}
-	close(jobs)
+		job := Job{
+			Context: ctx,
+			URL:     link,
+			Reply:   results,
+			Done:    func() { wg.Done() },
+		}
 
-	var wg = sync.WaitGroup{}
-
-	for range 20 {
 		wg.Add(1)
-		go worker(ctx, jobs, results, &wg)
+		jobs <- job
 	}
 
 	go func() {
@@ -54,58 +62,76 @@ func Check(ctx context.Context, links []string) <-chan Result {
 	return results
 }
 
-func validateAndCutURL(link string) (cutLink string) {
+var wereWorkersInitialized = false
+
+func Init(workerAmount int) {
+	if wereWorkersInitialized {
+		return
+	}
+
+	for range workerAmount {
+		go worker()
+	}
+}
+
+func validateURL(link string) (valid bool) {
 	parsed, err := url.ParseRequestURI(link)
 	if err != nil ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
 		parsed.Host == "" {
-		return ""
+		return false
 	}
-	if len(parsed.RequestURI()) == 1 {
-		cutLink = parsed.Host + parsed.Path
-	} else {
-		cutLink = parsed.Host + parsed.RequestURI()
-	}
-	return cutLink
+	return true
 }
 
-func worker(
-	ctx context.Context,
-	jobs <-chan string,
-	results chan<- Result,
-	wg *sync.WaitGroup,
-) {
-	defer wg.Done()
-
-	for link := range jobs {
-		// fmt.Println("Testing link:", link)
-		result := Result{}
-		result.URL = link
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
-		if err != nil {
-			result.Code = -1
-			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
-			results <- result
+func worker() {
+	for job := range jobs {
+		select {
+		case <-job.Context.Done():
+			job.Reply <- Result{
+				URL:  job.URL,
+				Code: -1,
+			}
+			job.Done()
 			continue
+		default:
+			result := Result{}
+			link := job.URL
+			result.URL = link
+
+			req, err := http.NewRequestWithContext(
+				job.Context,
+				http.MethodGet,
+				link,
+				nil,
+			)
+			if err != nil {
+				result.Code = -1
+				log.Printf("httpapi.Check -> %s: %s", link, err.Error())
+				job.Reply <- result
+				job.Done()
+				continue
+			}
+
+			t0 := time.Now()
+			r, err := client.Do(req)
+			t1 := time.Now()
+			result.Time = t1.Sub(t0).Milliseconds()
+			if err != nil {
+				result.Code = -1
+				log.Printf("httpapi.Check -> %s: %s", link, err.Error())
+				job.Reply <- result
+				job.Done()
+				continue
+			}
+			code := r.StatusCode
+
+			result.Code = code
+
+			r.Body.Close()
+			job.Reply <- result
+
+			job.Done()
 		}
-
-		t0 := time.Now()
-		r, err := client.Do(req)
-		t1 := time.Now()
-		result.Time = t1.Sub(t0).Milliseconds()
-		if err != nil {
-			result.Code = -1
-			log.Printf("httpapi.Check -> %s: %s", link, err.Error())
-			results <- result
-			continue
-		}
-		code := r.StatusCode
-
-		result.Code = code
-
-		r.Body.Close()
-
-		results <- result
 	}
 }
