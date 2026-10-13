@@ -22,7 +22,7 @@ type Result struct {
 	Time int64  `json:"ms"`
 }
 
-var jobs = make(chan Job, 16*1024)
+var jobs = make(chan Job, 4*1024)
 var client = http.Client{
 	Timeout: 5 * time.Second,
 }

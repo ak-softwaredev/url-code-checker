@@ -9,19 +9,17 @@ COPY go.mod ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /server ./cmd/server
 
 # Runtime stage
-FROM alpine:3.24.2
+FROM scratch
 
-RUN apk --no-cache add ca-certificates && \
-    adduser -D -g '' appuser
+COPY --from=builder /server /server
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /app
 
-COPY --from=builder /server .
-
-USER appuser
+USER 65532:65532
 
 EXPOSE 8080
 
