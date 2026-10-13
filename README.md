@@ -8,10 +8,10 @@ Built with Go for maximum speed, can be distributed as a Docker image.
 
 ## Features
 - Check multiple URLs concurrently
-- Know when a site is down or up
 - Streamed JSON output
-- Small Docker image, based on Alpine
+- Small Docker image size
 - No external dependencies
+- Fixed worker pool
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ make run
 ## Usage
 ### Array of URLs
 ```bash
-curl -X POST -N http://178.253.45.137:8080/api/v1/check \
+curl -X POST -N http://localhost:8080/api/v1/check \
   -H 'Content-Type: application/json'
   -d '{"links":["https://example.com","https://example.org","https://example.edu]}'
 ```
